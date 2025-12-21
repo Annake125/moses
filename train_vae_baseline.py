@@ -81,13 +81,14 @@ def get_comparison_config(n_batch=512):
     config.kl_w_end = 0.05             # 可调: 0.01-0.1
 
     # Learning rate schedule (SGDR)
-    # 要训练约40 epochs达到30k steps
-    # SGDR总epoch = sum(period * mult^i for i in range(restarts))
-    # 例: period=5, restarts=4, mult=2 -> 5+10+20+40=75 epochs (太多)
-    # 改为: period=10, restarts=2, mult=2 -> 10+20=30 epochs
-    config.lr_n_period = 10
-    config.lr_n_restarts = 4           # 10+20+40+80=150 epochs (如需40 epochs用2)
-    config.lr_n_mult = 1               # 不增长周期，保持10 epochs per restart
+    # 目标: ~30k steps
+    # 数据量1.58M / batch_size = steps_per_epoch
+    # 例: 1.58M / 512 = 3093 steps/epoch
+    # 需要: 30000 / 3093 ≈ 10 epochs
+    # SGDR: period * restarts = total epochs
+    config.lr_n_period = 5             # 每个周期5 epochs
+    config.lr_n_restarts = 2           # 重启2次: 5+5 = 10 epochs
+    config.lr_n_mult = 1               # 不增长周期
 
     # 其他
     config.n_workers = 4
@@ -112,8 +113,8 @@ def main():
     # 训练参数
     parser.add_argument('--device', type=str, default='cuda:0',
                         help='Device to use (cuda:0 or cpu)')
-    parser.add_argument('--n_batch', type=int, default=512,
-                        help='Batch size (512 or 256 for memory constraint, original diffusion=2048)')
+    parser.add_argument('--n_batch', type=int, default=256,
+                        help='Batch size (128/256/512, lower if CUDA errors occur, original diffusion=2048)')
     parser.add_argument('--seed', type=int, default=102,
                         help='Random seed (use 102 to align with diffusion)')
 
@@ -129,6 +130,8 @@ def main():
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
+        # 清理GPU缓存，避免内存碎片
+        torch.cuda.empty_cache()
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
@@ -205,8 +208,17 @@ def main():
     print("Starting Training")
     print("="*60)
     print(f"Device: {args.device}")
+
+    # 打印GPU信息（如果使用CUDA）
+    if args.device.startswith('cuda') and torch.cuda.is_available():
+        gpu_id = int(args.device.split(':')[1]) if ':' in args.device else 0
+        print(f"GPU Name: {torch.cuda.get_device_name(gpu_id)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(gpu_id).total_memory / 1024**3:.1f} GB")
+        print(f"GPU Memory Allocated: {torch.cuda.memory_allocated(gpu_id) / 1024**2:.1f} MB")
+
     print(f"Batch size: {config.n_batch}")
     print(f"Total epochs: {total_epochs}")
+    print(f"Expected total steps: ~{steps_per_epoch * total_epochs}")
     print("="*60 + "\n")
 
     try:
@@ -219,6 +231,16 @@ def main():
 
     except KeyboardInterrupt:
         print("\n⚠️  Training interrupted by user")
+
+    except RuntimeError as e:
+        print(f"\n❌ Training failed with error: {e}")
+        if "CUDA" in str(e) or "out of memory" in str(e):
+            print("\n💡 解决建议:")
+            print("1. 降低batch size: --n_batch 128 或 --n_batch 64")
+            print("2. 清理GPU缓存: nvidia-smi 查看GPU使用情况")
+            print("3. 尝试使用CPU: --device cpu (会很慢)")
+            print(f"\n当前配置: batch_size={config.n_batch}, device={args.device}")
+        raise
 
     except Exception as e:
         print(f"\n❌ Training failed with error: {e}")
