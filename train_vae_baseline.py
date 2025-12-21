@@ -48,22 +48,13 @@ def load_moses2_data(csv_path, split='train'):
     return data
 
 
-def get_comparison_config(args):
+def get_comparison_config(n_batch=512):
     """
     获取与diffusion模型对齐的VAE配置
     """
-    # 使用MOSES默认parser
+    # 使用MOSES默认parser创建基础配置
     parser = get_parser()
-
-    # 解析参数
-    if hasattr(args, '__dict__'):
-        config_args = []
-        for key, value in vars(args).items():
-            if value is not None and key not in ['device', 'use_moses2', 'moses2_path']:
-                config_args.extend([f'--{key}', str(value)])
-        config = parser.parse_args(config_args)
-    else:
-        config = parser.parse_args([])
+    config = parser.parse_args([])
 
     # ========== 对齐diffusion模型的参数 ==========
 
@@ -79,7 +70,7 @@ def get_comparison_config(args):
     config.d_dropout = 0.1             # ✅ 与diffusion对齐
 
     # 训练参数
-    config.n_batch = args.n_batch if hasattr(args, 'n_batch') else 512
+    config.n_batch = n_batch
     config.lr_start = 1e-4             # ✅ 与diffusion对齐
     config.lr_end = 1e-4
     config.clip_grad = 50
@@ -143,7 +134,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     # 获取配置
-    config = get_comparison_config(args)
+    config = get_comparison_config(n_batch=args.n_batch)
     config.log_file = args.log_file
     config.model_save = os.path.join(args.save_dir, 'model.pt')
     config.config_save = os.path.join(args.save_dir, 'config.pt')
