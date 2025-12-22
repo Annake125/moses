@@ -132,6 +132,10 @@ def main():
         torch.cuda.manual_seed(args.seed)
         # 清理GPU缓存，避免内存碎片
         torch.cuda.empty_cache()
+        # 设置cuDNN配置，可能解决CUBLAS错误
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+        print("✅ cuDNN benchmark mode enabled")
 
     # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
