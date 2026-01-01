@@ -87,6 +87,7 @@ def get_comparison_config(n_batch=256, lr=1e-3):
     # 其他
     config.n_workers = 4
     config.n_jobs = 1
+    config.save_frequency = 5          # 每5个epoch保存一次
 
     return config
 
