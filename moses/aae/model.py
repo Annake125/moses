@@ -132,6 +132,8 @@ class AAE(nn.Module):
 
     def tensor2string(self, tensor):
         ids = tensor.tolist()
+        # Filter out pad tokens before converting to string
+        ids = [id for id in ids if id != self.vocabulary.pad]
         string = self.vocabulary.ids2string(ids, rem_bos=True, rem_eos=True)
 
         return string
@@ -152,7 +154,7 @@ class AAE(nn.Module):
             ).fill_(self.vocabulary.bos)
             one_lens = torch.ones(n_batch, dtype=torch.long,
                                   device=self.device)
-            is_end = torch.zeros(n_batch, dtype=torch.uint8,
+            is_end = torch.zeros(n_batch, dtype=torch.bool,
                                  device=self.device)
 
             for i in range(max_len):
@@ -164,8 +166,8 @@ class AAE(nn.Module):
                 currents = torch.distributions.Categorical(logits).sample()
                 currents = currents.view(shape)
 
-                is_end[currents.view(-1) == self.vocabulary.eos] = 1
-                if is_end.sum() == max_len:
+                is_end[currents.view(-1) == self.vocabulary.eos] = True
+                if is_end.sum() == n_batch:
                     break
 
                 currents[is_end, :] = self.vocabulary.pad
