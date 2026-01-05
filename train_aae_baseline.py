@@ -49,16 +49,16 @@ def load_moses2_data(csv_path, split='train'):
     return data
 
 
-def get_comparison_config(n_batch=512, lr=1e-4):
+def get_comparison_config(n_batch=512, lr=1e-3):
     """
-    获取与diffusion模型对齐的AAE配置
+    获取AAE的推荐配置（平衡MOSES标准和对比实验需求）
 
     AAE关键参数:
     - latent_size: 128 (与diffusion hidden_dim对齐)
-    - learning_rate: 1e-4 (与diffusion对齐)
-    - dropout: 0.1 (与diffusion对齐)
+    - learning_rate: 1e-3 (AAE标准，比diffusion高)
+    - encoder_hidden_size: 512 (MOSES标准)
+    - train_epochs: 50 (折中，原MOSES=120，但为了与其他baseline对齐)
     - batch_size: 512 (折中值，diffusion使用2048)
-    - 训练步数: ~30k
     """
     # 使用MOSES默认parser创建基础配置
     parser = get_parser()
@@ -68,26 +68,26 @@ def get_comparison_config(n_batch=512, lr=1e-4):
 
     # 模型架构
     config.embedding_size = 32             # 嵌入维度 (MOSES标准)
-    config.encoder_hidden_size = 256       # 编码器隐藏层
+    config.encoder_hidden_size = 512       # ✅ 编码器隐藏层 (恢复MOSES标准)
     config.encoder_num_layers = 1          # 编码器层数
     config.encoder_bidirectional = True    # 双向LSTM
-    config.encoder_dropout = 0.1           # ✅ 与diffusion对齐
+    config.encoder_dropout = 0             # ✅ 恢复MOSES默认(AAE对dropout敏感)
 
     config.latent_size = 128               # ✅ 潜在维度 = diffusion hidden_dim
     config.decoder_hidden_size = 512       # 解码器隐藏层
     config.decoder_num_layers = 2          # 解码器层数
-    config.decoder_dropout = 0.1           # ✅ 与diffusion对齐
+    config.decoder_dropout = 0             # ✅ 恢复MOSES默认
 
     config.discriminator_layers = [640, 256]  # 判别器层
 
     # 训练参数
-    config.pretrain_epochs = 0             # 预训练轮数（可选）
-    config.train_epochs = 10               # 主训练轮数
+    config.pretrain_epochs = 10            # ⚠️ 重要：预训练帮助稳定AAE
+    config.train_epochs = 50               # ⚠️ 增加训练轮数(原120，折中为50)
     config.n_batch = n_batch               # batch size
-    config.lr = lr                         # ✅ 学习率 = diffusion 1e-4
+    config.lr = lr                         # ✅ 学习率 = AAE标准 1e-3
 
     # 学习率调度
-    config.step_size = 5                   # 每5个epoch衰减
+    config.step_size = 20                  # 每20个epoch衰减
     config.gamma = 0.5                     # 衰减因子0.5
 
     # 对抗训练
@@ -97,7 +97,7 @@ def get_comparison_config(n_batch=512, lr=1e-4):
     # 其他
     config.n_workers = 4
     config.n_jobs = 1
-    config.save_frequency = 5              # 每5个epoch保存一次
+    config.save_frequency = 10             # 每10个epoch保存一次
 
     return config
 
@@ -116,10 +116,14 @@ def main():
                         help='Device to use (cuda:0 or cpu)')
     parser.add_argument('--n_batch', type=int, default=512,
                         help='Batch size (256/512/1024, original AAE=512)')
-    parser.add_argument('--lr', type=float, default=1e-4,
-                        help='Learning rate (aligned with diffusion=1e-4)')
+    parser.add_argument('--lr', type=float, default=1e-3,
+                        help='Learning rate (AAE standard=1e-3, diffusion=1e-4)')
     parser.add_argument('--seed', type=int, default=102,
                         help='Random seed (use 102 to align with diffusion)')
+    parser.add_argument('--pretrain_epochs', type=int, default=10,
+                        help='Pretraining epochs (helps stabilize AAE)')
+    parser.add_argument('--train_epochs', type=int, default=50,
+                        help='Training epochs (original AAE=120, reduced for efficiency)')
 
     # 模型保存路径
     parser.add_argument('--save_dir', type=str, default='./checkpoints/aae_baseline',
@@ -145,6 +149,9 @@ def main():
 
     # 获取配置
     config = get_comparison_config(n_batch=args.n_batch, lr=args.lr)
+    # 允许命令行覆盖默认值
+    config.pretrain_epochs = args.pretrain_epochs
+    config.train_epochs = args.train_epochs
     config.log_file = args.log_file
     config.model_save = os.path.join(args.save_dir, 'model.pt')
     config.config_save = os.path.join(args.save_dir, 'config.pt')
@@ -165,33 +172,41 @@ def main():
         print(f"Train: {len(train_data)}, Test: {len(test_data)}")
 
     # 打印配置对比
-    print("\n" + "="*60)
-    print("AAE Configuration (Aligned with Diffusion)")
-    print("="*60)
+    print("\n" + "="*70)
+    print("AAE Configuration (Optimized for AAE Training)")
+    print("="*70)
     print(f"{'Parameter':<30} {'Value':<20} {'Note':<20}")
     print("-"*70)
     print(f"{'Model Type':<30} {'AAE':<20} {'Adversarial AE':<20}")
     print(f"{'Latent Size':<30} {config.latent_size:<20} {'✅ = diffusion 128':<20}")
-    print(f"{'Encoder Hidden':<30} {config.encoder_hidden_size:<20} {'256':<20}")
-    print(f"{'Decoder Hidden':<30} {config.decoder_hidden_size:<20} {'512':<20}")
-    print(f"{'Batch Size':<30} {config.n_batch:<20} {'⚠️ diffusion=2048':<20}")
-    print(f"{'Learning Rate':<30} {config.lr:<20} {'✅ = diffusion 1e-4':<20}")
-    print(f"{'Dropout':<30} {config.encoder_dropout:<20} {'✅ = diffusion 0.1':<20}")
+    print(f"{'Encoder Hidden':<30} {config.encoder_hidden_size:<20} {'✅ MOSES std 512':<20}")
+    print(f"{'Decoder Hidden':<30} {config.decoder_hidden_size:<20} {'✅ MOSES std 512':<20}")
+    print(f"{'Batch Size':<30} {config.n_batch:<20} {'diffusion=2048':<20}")
+    print(f"{'Learning Rate':<30} {config.lr:<20} {'✅ AAE std 1e-3':<20}")
+    print(f"{'Encoder Dropout':<30} {config.encoder_dropout:<20} {'MOSES default':<20}")
+    print(f"{'Decoder Dropout':<30} {config.decoder_dropout:<20} {'MOSES default':<20}")
+    print(f"{'Pretrain Epochs':<30} {config.pretrain_epochs:<20} {'⚠️ Important!':<20}")
+    print(f"{'Train Epochs':<30} {config.train_epochs:<20} {'MOSES=120':<20}")
     print(f"{'Seed':<30} {args.seed:<20} {'✅ = diffusion 102':<20}")
 
     # 计算训练步数
     steps_per_epoch = len(train_data) // config.n_batch
-    total_steps = steps_per_epoch * config.train_epochs
-    target_steps = 30000
+    pretrain_steps = steps_per_epoch * config.pretrain_epochs
+    train_steps = steps_per_epoch * config.train_epochs
+    total_steps = pretrain_steps + train_steps
 
     print(f"{'Steps per Epoch':<30} {steps_per_epoch:<20}")
-    print(f"{'Total Epochs':<30} {config.train_epochs:<20}")
-    print(f"{'Total Steps':<30} {total_steps:<20} {f'Target: {target_steps}':<20}")
+    print(f"{'Pretrain Steps':<30} {pretrain_steps:<20} {f'{config.pretrain_epochs} epochs':<20}")
+    print(f"{'Train Steps':<30} {train_steps:<20} {f'{config.train_epochs} epochs':<20}")
+    print(f"{'Total Steps':<30} {total_steps:<20}")
     print("-"*70)
 
-    if total_steps < target_steps * 0.8:
-        print(f"⚠️  Warning: Total steps ({total_steps}) < target ({target_steps})")
-        print(f"   Consider increasing train_epochs to {int(target_steps/steps_per_epoch) + 1}")
+    print("\n⚠️  AAE Training Notes:")
+    print("  - AAE uses adversarial training, which is more unstable than VAE")
+    print("  - Pretraining helps stabilize the autoencoder before adversarial training")
+    print("  - Higher learning rate (1e-3) is necessary for AAE convergence")
+    print("  - Expect training to take longer than VAE/CharRNN")
+    print("  - Validity should reach >90% with proper training")
 
     # 创建模型
     print("\n" + "="*60)
@@ -227,10 +242,15 @@ def main():
 
     print(f"Batch size: {config.n_batch}")
     print(f"Learning rate: {config.lr}")
-    print(f"Pretrain epochs: {config.pretrain_epochs}")
-    print(f"Train epochs: {config.train_epochs}")
-    print(f"Expected total steps: ~{total_steps}")
+    print(f"Pretrain epochs: {config.pretrain_epochs} (autoencoder only)")
+    print(f"Train epochs: {config.train_epochs} (adversarial training)")
+    print(f"Expected total steps: ~{total_steps} ({pretrain_steps} + {train_steps})")
     print("="*60 + "\n")
+
+    if config.pretrain_epochs > 0:
+        print("⚡ Phase 1: Pretraining autoencoder...")
+        print(f"   This will train for {config.pretrain_epochs} epochs without discriminator")
+        print(f"   Helps stabilize the model before adversarial training\n")
 
     try:
         model = trainer.fit(model, train_data, val_data=test_data)
