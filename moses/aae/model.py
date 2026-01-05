@@ -23,7 +23,9 @@ class Encoder(nn.Module):
         batch_size = x.shape[0]
 
         x = self.embedding_layer(x)
-        x = pack_padded_sequence(x, lengths, batch_first=True)
+        # pack_padded_sequence requires lengths on CPU
+        lengths_cpu = lengths.cpu() if lengths.is_cuda else lengths
+        x = pack_padded_sequence(x, lengths_cpu, batch_first=True)
         _, (_, x) = self.lstm_layer(x)
         x = x.permute(1, 2, 0).contiguous().view(batch_size, -1)
         x = self.linear_layer(x)
@@ -52,7 +54,9 @@ class Decoder(nn.Module):
             states = (h0, c0)
 
         x = self.embedding_layer(x)
-        x = pack_padded_sequence(x, lengths, batch_first=True)
+        # pack_padded_sequence requires lengths on CPU
+        lengths_cpu = lengths.cpu() if lengths.is_cuda else lengths
+        x = pack_padded_sequence(x, lengths_cpu, batch_first=True)
         x, states = self.lstm_layer(x, states)
         x, lengths = pad_packed_sequence(x, batch_first=True)
         x = self.linear_layer(x)
@@ -128,6 +132,8 @@ class AAE(nn.Module):
 
     def tensor2string(self, tensor):
         ids = tensor.tolist()
+        # Filter out pad tokens before converting to string
+        ids = [id for id in ids if id != self.vocabulary.pad]
         string = self.vocabulary.ids2string(ids, rem_bos=True, rem_eos=True)
 
         return string
@@ -148,7 +154,7 @@ class AAE(nn.Module):
             ).fill_(self.vocabulary.bos)
             one_lens = torch.ones(n_batch, dtype=torch.long,
                                   device=self.device)
-            is_end = torch.zeros(n_batch, dtype=torch.uint8,
+            is_end = torch.zeros(n_batch, dtype=torch.bool,
                                  device=self.device)
 
             for i in range(max_len):
@@ -160,8 +166,8 @@ class AAE(nn.Module):
                 currents = torch.distributions.Categorical(logits).sample()
                 currents = currents.view(shape)
 
-                is_end[currents.view(-1) == self.vocabulary.eos] = 1
-                if is_end.sum() == max_len:
+                is_end[currents.view(-1) == self.vocabulary.eos] = True
+                if is_end.sum() == n_batch:
                     break
 
                 currents[is_end, :] = self.vocabulary.pad
